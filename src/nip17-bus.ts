@@ -27,6 +27,18 @@ import {
 
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
+// Where to publish the bot's own kind:10050 (NIP-17 DM relay list) on startup,
+// in addition to the bot's own configured relays. Without wide distribution,
+// senders' clients may query a relay that doesn't have the kind:10050 event,
+// fall back to defaults the bot doesn't subscribe to, and silently fail to
+// deliver. These three are the most-queried general-purpose relays as of
+// 2026-05; operators can override via Nip17BusOptions.discoveryRelays.
+export const DEFAULT_DISCOVERY_RELAYS = [
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.primal.net",
+];
+
 // NIP-59 gift wraps use randomized timestamps up to 2 days in the past,
 // so we need a much wider lookback window than normal
 const STARTUP_LOOKBACK_SEC = 2 * 24 * 60 * 60; // 2 days
@@ -49,6 +61,20 @@ export interface Nip17BusOptions {
   privateKey: string;
   relays?: string[];
   accountId?: string;
+  /**
+   * Publish a fresh kind:10050 (NIP-17 DM relay list) on bus startup so
+   * senders can find which relays this bot is listening on. Defaults to
+   * `true`. The plugin previously only *read* recipients' kind:10050; without
+   * publishing the bot's own, the events bit-rot over weeks and DMs become
+   * silently undeliverable for clients that can't find a matching relay list.
+   */
+  publishRelayList?: boolean;
+  /**
+   * Where to publish the kind:10050 in addition to the bot's own relays.
+   * Defaults to DEFAULT_DISCOVERY_RELAYS. Set to `[]` to publish only to the
+   * bot's own configured relays.
+   */
+  discoveryRelays?: string[];
   onMessage: (
     senderPubkey: string,
     text: string,
@@ -117,6 +143,75 @@ export function isValidPubkey(input: string): boolean {
 }
 
 // ============================================================================
+// Publish own kind:10050 (NIP-17 DM relay list)
+// ============================================================================
+
+/**
+ * Sign and publish this bot's kind:10050 to a wide set of relays so senders
+ * can find which relays the bot is listening on.
+ *
+ * kind:10050 is a NIP-09 replaceable event — re-publishing on every bus
+ * startup just bumps `created_at` and harmlessly replaces any prior copy.
+ *
+ * Per-relay failures are logged via onError but do not throw: this is a
+ * best-effort broadcast. Some relays (chat-only HAVENs, signup-required
+ * relays) will always reject these events; that's fine as long as enough
+ * other relays accept them.
+ */
+async function publishOwnRelayList(
+  pool: SimplePool,
+  sk: Uint8Array,
+  pk: string,
+  ownRelays: string[],
+  discoveryRelays: string[],
+  onError?: (error: Error, context: string) => void,
+): Promise<void> {
+  const event = finalizeEvent(
+    {
+      kind: 10050,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: ownRelays.map((r) => ["relay", r]),
+      content: "",
+    },
+    sk,
+  );
+
+  // Union of discovery + own relays, deduplicated by normalized URL.
+  const normalize = (u: string) => u.replace(/\/+$/, "").toLowerCase();
+  const seen = new Set<string>();
+  const targets: string[] = [];
+  for (const r of [...discoveryRelays, ...ownRelays]) {
+    const key = normalize(r);
+    if (!seen.has(key)) {
+      seen.add(key);
+      targets.push(r);
+    }
+  }
+
+  if (targets.length === 0) return;
+
+  const results = await Promise.allSettled(pool.publish(targets, event));
+  const failures: string[] = [];
+  results.forEach((r, i) => {
+    if (r.status === "rejected") {
+      failures.push(`${targets[i]}: ${(r.reason as Error)?.message ?? r.reason}`);
+    }
+  });
+  if (failures.length > 0 && failures.length === targets.length) {
+    onError?.(
+      new Error(`kind:10050 publish failed on all ${targets.length} relays for ${pk.slice(0, 12)}…: ${failures.join("; ")}`),
+      "publish-relay-list",
+    );
+  } else if (failures.length > 0) {
+    // Partial success is normal; log at info-level via onError with a non-fatal context.
+    onError?.(
+      new Error(`kind:10050 published to ${targets.length - failures.length}/${targets.length} relays (${failures.length} rejections expected for chat-only/signup relays)`),
+      "publish-relay-list-partial",
+    );
+  }
+}
+
+// ============================================================================
 // Main Bus - NIP-17 Gift-Wrapped DMs
 // ============================================================================
 
@@ -146,6 +241,8 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
+    publishRelayList = true,
+    discoveryRelays = DEFAULT_DISCOVERY_RELAYS,
     onMessage,
     onError,
     onEose,
@@ -380,6 +477,14 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   }
 
   let activeSub = subscribe();
+
+  // Fire-and-forget publish of our own kind:10050 so senders can find us.
+  // Replaceable, so each restart just refreshes; no harm in re-running.
+  if (publishRelayList) {
+    publishOwnRelayList(pool, sk, pk, relays, discoveryRelays, onError).catch(
+      (err) => onError?.(err as Error, "publish-relay-list"),
+    );
+  }
 
   function scheduleRefresh(): void {
     if (closed) return;
