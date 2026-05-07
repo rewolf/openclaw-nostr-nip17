@@ -5,5 +5,94 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "channelConfigs": {
+    "nostr-nip17": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "privateKey": {
+            "type": "string"
+          },
+          "relays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["pairing", "allowlist", "open", "disabled"]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "accounts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "privateKey": {
+                  "type": "string"
+                },
+                "relays": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "dmPolicy": {
+                  "type": "string",
+                  "enum": ["pairing", "allowlist", "open", "disabled"]
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "label": "Nostr (NIP-17)",
+      "description": "Private DMs via Nostr relays using NIP-17 gift-wrapped encryption."
+    }
   }
 }
