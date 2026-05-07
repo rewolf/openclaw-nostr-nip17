@@ -79,7 +79,8 @@ export interface Nip17BusOptions {
     senderPubkey: string,
     text: string,
     reply: (text: string) => Promise<void>,
-    media?: DecryptedMedia[],
+    media: DecryptedMedia[] | undefined,
+    react: (emoji: string) => Promise<void>,
   ) => Promise<void>;
   onError?: (error: Error, context: string) => void;
   onConnect?: (relay: string) => void;
@@ -91,6 +92,7 @@ export interface Nip17BusHandle {
   close: () => void;
   publicKey: string;
   sendDm: (toPubkey: string, text: string) => Promise<void>;
+  sendReaction: (toPubkey: string, rumorId: string, emoji: string) => Promise<void>;
 }
 
 // ============================================================================
@@ -370,6 +372,16 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
         }
       };
 
+      // Create reaction function — targets this rumor (NIP-25 + ["k", "14"]),
+      // wrapped to prevent unhandled rejections
+      const reactFn = async (emoji: string): Promise<void> => {
+        try {
+          await sendNip17Reaction(pool, sk, senderPubkey, rumor.id, emoji, relays, trustedRelays, onError);
+        } catch (err) {
+          onError?.(err as Error, `react ${emoji} to ${senderPubkey}`);
+        }
+      };
+
       // Parse and decrypt media attachments (if any)
       let decryptedMedia: DecryptedMedia[] | undefined;
       
@@ -423,7 +435,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
         }
       }
 
-      await onMessage(senderPubkey, text, replyFn, decryptedMedia);
+      await onMessage(senderPubkey, text, replyFn, decryptedMedia, reactFn);
       lastRumorAt = Math.max(lastRumorAt, rumor.created_at);
       scheduleStatePersist(event.created_at, event.id);
     } catch (err) {
@@ -511,6 +523,10 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
     await sendNip17Dm(pool, sk, toPubkey, text, relays, trustedRelays, onError);
   };
 
+  const sendReaction = async (toPubkey: string, rumorId: string, emoji: string): Promise<void> => {
+    await sendNip17Reaction(pool, sk, toPubkey, rumorId, emoji, relays, trustedRelays, onError);
+  };
+
   return {
     close: () => {
       closed = true;
@@ -521,18 +537,19 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
     },
     publicKey: pk,
     sendDm,
+    sendReaction,
   };
 }
 
 // ============================================================================
-// Send NIP-17 DM
+// Publish NIP-17 wrapped rumors
 // ============================================================================
 
-async function sendNip17Dm(
+async function publishWrappedRumor(
   pool: SimplePool,
   sk: Uint8Array,
   toPubkey: string,
-  text: string,
+  rumorTemplate: { kind: number; content: string; tags: string[][]; created_at?: number },
   relays: string[],
   trustedRelays: Set<string>,
   onError?: (error: Error, context: string) => void,
@@ -563,17 +580,14 @@ async function sendNip17Dm(
     onError?.(new Error(`Adding recipient DM relays: ${extraRelays.join(", ")}`), "recipient-relays");
   }
 
-  // Create the kind 14 rumor (unsigned chat message)
-  const chatEvent = {
-    kind: 14,
-    content: text,
-    tags: [["p", toPubkey]], // Only receiver
-    created_at: Math.floor(Date.now() / 1000),
+  const event = {
+    ...rumorTemplate,
+    created_at: rumorTemplate.created_at ?? Math.floor(Date.now() / 1000),
   };
 
   // Manual NIP-59: rumor → seal → wrap
   // createWrap already signs with an ephemeral key — do NOT re-sign with sk
-  const rumor = require('nostr-tools/nip59').createRumor(chatEvent, sk);
+  const rumor = require('nostr-tools/nip59').createRumor(event, sk);
   const sealRecipient = require('nostr-tools/nip59').createSeal(rumor, sk, toPubkey);
   const wrapForRecipient = require('nostr-tools/nip59').createWrap(sealRecipient, toPubkey);
 
@@ -614,7 +628,7 @@ async function sendNip17Dm(
   }
 
   if (publishAttempts.length === 0) {
-    throw new Error("No publish attempts were started for the NIP-17 message");
+    throw new Error("No publish attempts were started for the wrapped rumor");
   }
 
   const settled = await Promise.allSettled(publishAttempts.map((attempt) => attempt.promise));
@@ -628,7 +642,7 @@ async function sendNip17Dm(
   const recipientFailures = recipientResults.filter((entry) => entry.result.status === "rejected");
 
   if (recipientResults.length === 0) {
-    throw new Error("No recipient publish attempts were created for the NIP-17 message");
+    throw new Error("No recipient publish attempts were created for the wrapped rumor");
   }
 
   if (recipientSuccesses.length === 0) {
@@ -647,4 +661,51 @@ async function sendNip17Dm(
       "publish"
     );
   }
+}
+
+async function sendNip17Dm(
+  pool: SimplePool,
+  sk: Uint8Array,
+  toPubkey: string,
+  text: string,
+  relays: string[],
+  trustedRelays: Set<string>,
+  onError?: (error: Error, context: string) => void,
+): Promise<void> {
+  await publishWrappedRumor(
+    pool,
+    sk,
+    toPubkey,
+    { kind: 14, content: text, tags: [["p", toPubkey]] },
+    relays,
+    trustedRelays,
+    onError,
+  );
+}
+
+// NIP-25 reaction wrapped per NIP-17. The ["k", "14"] tag tells clients the
+// reaction targets a kind:14 chat message; the ["e", rumorId] points at it.
+async function sendNip17Reaction(
+  pool: SimplePool,
+  sk: Uint8Array,
+  toPubkey: string,
+  rumorId: string,
+  emoji: string,
+  relays: string[],
+  trustedRelays: Set<string>,
+  onError?: (error: Error, context: string) => void,
+): Promise<void> {
+  await publishWrappedRumor(
+    pool,
+    sk,
+    toPubkey,
+    {
+      kind: 7,
+      content: emoji,
+      tags: [["e", rumorId], ["p", toPubkey], ["k", "14"]],
+    },
+    relays,
+    trustedRelays,
+    onError,
+  );
 }

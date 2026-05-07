@@ -16,6 +16,21 @@ import * as os from "os";
 
 const activeBuses = new Map<string, Nip17BusHandle>();
 
+// Visible feedback while a reply is being computed. Sent as kind:7 reactions
+// (NIP-25, gift-wrapped per NIP-17) targeting the inbound rumor. One random
+// pick fires on reply-start; no keepalive cycle.
+const THINKING_EMOJIS = ["💭", "🧠", "🤔", "💡", "⏳"];
+const pickThinking = (): string =>
+  THINKING_EMOJIS[Math.floor(Math.random() * THINKING_EMOJIS.length)];
+
+// Event-driven reactions. Fired once per dispatcher event, no dedup, no
+// per-reply caps — stacking is desired UX.
+const EVENT_EMOJI = {
+  toolStart: "🔧",
+  planUpdate: "📋",
+  compactionStart: "🗜️",
+} as const;
+
 async function ensureActiveBus(accountId: string): Promise<Nip17BusHandle> {
   const existing = activeBuses.get(accountId);
   if (existing) return existing;
@@ -203,10 +218,20 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        onMessage: async (senderPubkey, text, replyFn, media) => {
+        onMessage: async (senderPubkey, text, replyFn, media, reactFn) => {
           const hasMedia = media && media.length > 0;
           const mediaDesc = hasMedia ? ` with ${media.length} media attachment(s)` : "";
           ctx.log?.info(`[${account.accountId}] NIP-17 DM from ${senderPubkey}${mediaDesc}: ${text.slice(0, 50)}...`);
+
+          // One helper for every reaction call site (receipt + onReplyStart +
+          // event-driven). reactFn already reports failures via onError.
+          const fireReaction = (emoji: string): void => {
+            void reactFn(emoji).catch(() => {});
+          };
+
+          // Receipt: fires before any guard / model selection so the sender
+          // sees something even when the reply pipeline short-circuits.
+          fireReaction("🤙");
 
           const cfg = runtime.config.loadConfig();
 
@@ -311,13 +336,16 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             accountId: account.accountId,
           });
 
-          // Dispatch reply through the full pipeline
+          // Dispatch reply through the full pipeline.
+          // dispatcherOptions: delivery + typing-side hooks (onReplyStart lives here).
+          // replyOptions: agent-lifecycle hooks (tool/plan/compaction) and onModelSelected,
+          // which the prefix template needs to interpolate {{model}} post-fallback.
           await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
             cfg,
             dispatcherOptions: {
               ...prefixOptions,
-              onModelSelected,
+              onReplyStart: () => fireReaction(pickThinking()),
               deliver: async (payload: { text?: string; mediaPath?: string }) => {
                 const responseText = payload.text ?? "";
                 if (responseText.trim()) {
@@ -328,6 +356,12 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
               onError: (err: unknown) => {
                 ctx.log?.error?.(`[${account.accountId}] NIP-17 reply error: ${String(err)}`);
               },
+            },
+            replyOptions: {
+              onModelSelected,
+              onToolStart: () => fireReaction(EVENT_EMOJI.toolStart),
+              onPlanUpdate: () => fireReaction(EVENT_EMOJI.planUpdate),
+              onCompactionStart: () => fireReaction(EVENT_EMOJI.compactionStart),
             },
           });
         },
