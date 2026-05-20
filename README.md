@@ -17,9 +17,10 @@ Private DMs for [OpenClaw](https://github.com/openclaw/openclaw) via [Nostr](htt
 # Clone the repo
 git clone https://github.com/fabianfabian/openclaw-nostr-nip17.git nostr-nip17
 
-# Install dependencies
+# Install dependencies and build
 cd nostr-nip17
 npm install
+npm run build
 
 # Link into OpenClaw
 openclaw plugins install -l /path/to/nostr-nip17

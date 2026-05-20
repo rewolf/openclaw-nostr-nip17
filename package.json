@@ -3,14 +3,37 @@
   "version": "0.1.0",
   "description": "OpenClaw Nostr channel plugin for NIP-17 private direct messages",
   "type": "module",
+  "scripts": {
+    "build": "rm -rf dist && esbuild index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --packages=external --sourcemap",
+    "prepublishOnly": "npm run build"
+  },
   "dependencies": {
     "nostr-tools": "^2.23.1",
     "zod": "^4.3.6"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "files": [
+    "dist/**",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
   "openclaw": {
     "extensions": [
       "./index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
     ],
     "channel": {
       "id": "nostr-nip17",
