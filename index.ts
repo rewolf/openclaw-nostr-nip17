@@ -1,4 +1,4 @@
-import { OpenClawPluginApi, emptyPluginConfigSchema } from "openclaw/plugin-sdk/nostr";
+import { type OpenClawPluginApi, emptyPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { nip17Plugin } from "./src/channel.js";
 import { setNip17Runtime } from "./src/runtime.js";
 
