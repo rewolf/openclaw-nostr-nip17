@@ -21,6 +21,8 @@ git clone https://github.com/fabianfabian/openclaw-nostr-nip17.git nostr-nip17
 cd nostr-nip17
 npm install
 npm run build
+npm test
+npm test
 
 # Link into OpenClaw
 openclaw plugins install -l /path/to/nostr-nip17
