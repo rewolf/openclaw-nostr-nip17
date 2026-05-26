@@ -3,6 +3,10 @@ import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import { collectStatusIssuesFromLastError, createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/channel-status";
 import { Nip17ConfigSchema } from "./config-schema.js";
 import { normalizePubkey, startNip17Bus, type Nip17BusHandle } from "./nip17-bus.js";
+import {
+  createDeliveryFailureNotifier,
+  createNostrDeliverHandler,
+} from "./reply-delivery.js";
 import { getNip17Runtime } from "./runtime.js";
 import {
   listNip17AccountIds,
@@ -336,6 +340,14 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             accountId: account.accountId,
           });
 
+          const notifyDeliveryFailure = createDeliveryFailureNotifier(replyFn);
+          const deliver = createNostrDeliverHandler({
+            replyFn,
+            log: ctx.log,
+            accountId: account.accountId,
+            senderPubkey,
+          });
+
           // Dispatch reply through the full pipeline.
           // dispatcherOptions: delivery + typing-side hooks (onReplyStart lives here).
           // replyOptions: agent-lifecycle hooks (tool/plan/compaction) and onModelSelected,
@@ -346,15 +358,13 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             dispatcherOptions: {
               ...prefixOptions,
               onReplyStart: () => fireReaction(pickThinking()),
-              deliver: async (payload: { text?: string; mediaPath?: string }) => {
-                const responseText = payload.text ?? "";
-                if (responseText.trim()) {
-                  await replyFn(responseText);
-                  ctx.log?.info(`[${account.accountId}] NIP-17 reply sent to ${senderPubkey}`);
-                }
-              },
-              onError: (err: unknown) => {
-                ctx.log?.error?.(`[${account.accountId}] NIP-17 reply error: ${String(err)}`);
+              deliver,
+              onError: (err: unknown, info?: { kind?: string }) => {
+                const kind = info?.kind ?? "unknown";
+                ctx.log?.error?.(
+                  `[${account.accountId}] NIP-17 dispatch error (${kind}): ${String(err)}`,
+                );
+                void notifyDeliveryFailure(err);
               },
             },
             replyOptions: {

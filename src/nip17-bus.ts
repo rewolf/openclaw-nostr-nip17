@@ -29,6 +29,8 @@ import {
   fetchAndDecryptKind15File,
   type Kind15FileMetadata,
 } from "./kind15-handler.js";
+import { createInboundReplyFn, toError } from "./reply-delivery.js";
+import { assertPublishSucceeded, type PublishAttemptResult } from "./publish-results.js";
 
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
@@ -368,14 +370,12 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       const senderPubkey = rumor.pubkey;
       const text = rumor.content;
 
-      // Create reply function — wrapped to prevent unhandled rejections
-      const replyFn = async (responseText: string): Promise<void> => {
-        try {
-          await sendNip17Dm(pool, sk, senderPubkey, responseText, relays, trustedRelays, onError);
-        } catch (err) {
-          onError?.(err as Error, `reply to ${senderPubkey}`);
-        }
-      };
+      const replyFn = createInboundReplyFn({
+        sendDm: (text) =>
+          sendNip17Dm(pool, sk, senderPubkey, text, relays, trustedRelays, onError),
+        onError,
+        errorContext: `reply to ${senderPubkey}`,
+      });
 
       // Create reaction function — targets this rumor (NIP-25 + ["k", "14"]),
       // wrapped to prevent unhandled rejections
@@ -637,34 +637,17 @@ async function publishWrappedRumor(
   }
 
   const settled = await Promise.allSettled(publishAttempts.map((attempt) => attempt.promise));
-  const results = publishAttempts.map((attempt, index) => ({
-    ...attempt,
+  const results: PublishAttemptResult[] = publishAttempts.map((attempt, index) => ({
+    kind: attempt.kind,
+    relay: attempt.relay,
     result: settled[index],
   }));
 
-  const recipientResults = results.filter((entry) => entry.kind === "recipient");
-  const recipientSuccesses = recipientResults.filter((entry) => entry.result.status === "fulfilled");
-  const recipientFailures = recipientResults.filter((entry) => entry.result.status === "rejected");
-
-  if (recipientResults.length === 0) {
-    throw new Error("No recipient publish attempts were created for the wrapped rumor");
-  }
-
-  if (recipientSuccesses.length === 0) {
-    throw new Error(
-      `Recipient publish failed on all relays: ${recipientFailures.map((entry) => `${entry.relay}: ${(entry.result as PromiseRejectedResult).reason}`).join(", ")}`
-    );
-  }
-
-  const selfResults = results.filter((entry) => entry.kind === "self");
-  const selfFailures = selfResults.filter((entry) => entry.result.status === "rejected");
-  if (recipientFailures.length > 0 || selfFailures.length > 0) {
-    onError?.(
-      new Error(
-        `Publish partial success: recipient ${recipientSuccesses.length}/${recipientResults.length} ok, self ${selfResults.length - selfFailures.length}/${selfResults.length} ok`
-      ),
-      "publish"
-    );
+  try {
+    assertPublishSucceeded(results);
+  } catch (err) {
+    onError?.(toError(err), "publish");
+    throw err;
   }
 }
 

@@ -22,7 +22,6 @@ cd nostr-nip17
 npm install
 npm run build
 npm test
-npm test
 
 # Link into OpenClaw
 openclaw plugins install -l /path/to/nostr-nip17
@@ -170,6 +169,10 @@ Minimal install checklist:
 - **allowlist** — only pubkeys in `allowFrom` can message
 - **open** — anyone can message (use with caution)
 - **disabled** — no inbound messages
+
+## Troubleshooting delivery
+
+If the agent replies in the session but nothing appears in your Nostr client, see [docs/technical/delivery.md](docs/technical/delivery.md) for how publish failures are logged and when a failure notice DM is sent.
 
 ## Requirements
 
