@@ -153,7 +153,35 @@ Each agent npub should have their DM relay list published (kind 10050), it also 
 | `allowFrom` | array<string \| number> | `[]` | top-level or account | Allowed sender pubkeys for allowlist/pairing flows |
 | `name` | string | — | account | Display name for the account |
 | `enabled` | boolean | `true` | account | Enable or disable that account |
+| `reactionToggle` | object | all enabled | top-level or account | Per-reaction on/off for status emoji (NIP-25) sent while processing DMs |
 | `accounts` | object | — | top-level | Named account overrides keyed by account id |
+
+`reactionToggle` keys (omit or set `true` to enable; set `false` to disable):
+
+| Key | When it fires |
+|-----|---------------|
+| `receipt` | Immediately when a DM is received |
+| `onReplyStart` | When reply generation begins |
+| `onToolStart` | When the agent starts a tool call |
+| `onPlanUpdate` | When the agent updates its plan |
+| `onCompactionStart` | When context compaction begins |
+
+Account-level keys deep-merge with top-level settings. Example — receipt and compaction only:
+
+```json
+{
+  "channels": {
+    "nostr-nip17": {
+      "privateKey": "nsec1...",
+      "reactionToggle": {
+        "onReplyStart": false,
+        "onToolStart": false,
+        "onPlanUpdate": false
+      }
+    }
+  }
+}
+```
 
 Minimal install checklist:
 

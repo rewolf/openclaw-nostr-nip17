@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { Nip17AccountConfig, Nip17Config } from "./config-schema.js";
 import { getPublicKeyFromPrivate, DEFAULT_RELAYS } from "./nip17-bus.js";
+import { mergeReactionToggle } from "./reactions.js";
 
 export interface ResolvedNip17Account {
   accountId: string;
@@ -59,6 +60,7 @@ function mergeAccountConfig(base: Nip17Config, accountOverride: Nip17AccountConf
     // Only override arrays if explicitly set in account config
     relays: accountOverride.relays ?? base.relays,
     allowFrom: accountOverride.allowFrom ?? base.allowFrom,
+    reactionToggle: mergeReactionToggle(base.reactionToggle, accountOverride.reactionToggle),
   };
 }
 
@@ -102,6 +104,7 @@ export function resolveNip17Account(opts: {
       relays: merged.relays,
       dmPolicy: merged.dmPolicy,
       allowFrom: merged.allowFrom,
+      reactionToggle: merged.reactionToggle,
     },
   };
 }

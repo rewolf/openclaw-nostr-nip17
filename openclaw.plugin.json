@@ -57,6 +57,17 @@
               ]
             }
           },
+          "reactionToggle": {
+            "type": "object",
+            "properties": {
+              "receipt": { "type": "boolean" },
+              "onReplyStart": { "type": "boolean" },
+              "onToolStart": { "type": "boolean" },
+              "onPlanUpdate": { "type": "boolean" },
+              "onCompactionStart": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
           "accounts": {
             "type": "object",
             "propertyNames": {
@@ -109,6 +120,17 @@
                       }
                     ]
                   }
+                },
+                "reactionToggle": {
+                  "type": "object",
+                  "properties": {
+                    "receipt": { "type": "boolean" },
+                    "onReplyStart": { "type": "boolean" },
+                    "onToolStart": { "type": "boolean" },
+                    "onPlanUpdate": { "type": "boolean" },
+                    "onCompactionStart": { "type": "boolean" }
+                  },
+                  "additionalProperties": false
                 }
               },
               "additionalProperties": false

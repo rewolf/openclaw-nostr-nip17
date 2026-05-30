@@ -14,26 +14,18 @@ import {
   resolveNip17Account,
   type ResolvedNip17Account,
 } from "./types.js";
+import {
+  createReactionFirer,
+  createReplyReactionHooks,
+  EVENT_EMOJI,
+  pickThinking,
+  RECEIPT_EMOJI,
+} from "./reactions.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 const activeBuses = new Map<string, Nip17BusHandle>();
-
-// Visible feedback while a reply is being computed. Sent as kind:7 reactions
-// (NIP-25, gift-wrapped per NIP-17) targeting the inbound rumor. One random
-// pick fires on reply-start; no keepalive cycle.
-const THINKING_EMOJIS = ["💭", "🧠", "🤔", "💡", "⏳"];
-const pickThinking = (): string =>
-  THINKING_EMOJIS[Math.floor(Math.random() * THINKING_EMOJIS.length)];
-
-// Event-driven reactions. Fired once per dispatcher event, no dedup, no
-// per-reply caps — stacking is desired UX.
-const EVENT_EMOJI = {
-  toolStart: "🔧",
-  planUpdate: "📋",
-  compactionStart: "🗜️",
-} as const;
 
 async function ensureActiveBus(accountId: string): Promise<Nip17BusHandle> {
   const existing = activeBuses.get(accountId);
@@ -229,13 +221,19 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
 
           // One helper for every reaction call site (receipt + onReplyStart +
           // event-driven). reactFn already reports failures via onError.
-          const fireReaction = (emoji: string): void => {
-            void reactFn(emoji).catch(() => {});
-          };
+          const reactionFirer = createReactionFirer({
+            toggles: account.config.reactionToggle,
+            reactFn,
+          });
+          const replyReactionHooks = createReplyReactionHooks(
+            reactionFirer,
+            pickThinking,
+            EVENT_EMOJI,
+          );
 
           // Receipt: fires before any guard / model selection so the sender
           // sees something even when the reply pipeline short-circuits.
-          fireReaction("🤙");
+          reactionFirer.fireIfEnabled("receipt", RECEIPT_EMOJI);
 
           const cfg = runtime.config.loadConfig();
 
@@ -357,7 +355,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             cfg,
             dispatcherOptions: {
               ...prefixOptions,
-              onReplyStart: () => fireReaction(pickThinking()),
+              onReplyStart: replyReactionHooks.onReplyStart,
               deliver,
               onError: (err: unknown, info?: { kind?: string }) => {
                 const kind = info?.kind ?? "unknown";
@@ -369,9 +367,9 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             },
             replyOptions: {
               onModelSelected,
-              onToolStart: () => fireReaction(EVENT_EMOJI.toolStart),
-              onPlanUpdate: () => fireReaction(EVENT_EMOJI.planUpdate),
-              onCompactionStart: () => fireReaction(EVENT_EMOJI.compactionStart),
+              onToolStart: replyReactionHooks.onToolStart,
+              onPlanUpdate: replyReactionHooks.onPlanUpdate,
+              onCompactionStart: replyReactionHooks.onCompactionStart,
             },
           });
         },
