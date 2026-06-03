@@ -10,6 +10,7 @@ Private DMs for [OpenClaw](https://github.com/openclaw/openclaw) via [Nostr](htt
 - **NIP-17 gift-wrapped DMs** — end-to-end encrypted direct messages
 - **Multi-account support** — run multiple npubs, each bound to a different agent
 - **Auto-reconnect** — stays connected to relays via long-lived subscriptions
+- **Inbound media failure reporting** — failed attachments are passed to the agent as untrusted structured metadata (`UntrustedStructuredContext`), not mixed into the message body
 
 ## Install
 

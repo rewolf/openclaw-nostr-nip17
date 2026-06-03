@@ -17,12 +17,12 @@ import {
   computeSinceTimestamp,
 } from "./state-store.js";
 import { getRecipientDmRelays } from "./relay-cache.js";
+import type { DecryptedMedia, FailedMediaAttachment } from "./inbound-media-context.js";
+import { processKind14ImetaAttachments, processKind15FileAttachment } from "./inbound-media-processing.js";
 import {
   parseImetaTags,
   fetchAndDecryptBlob,
-  mediaToDataUrl,
   deriveConversationKey,
-  type MediaAttachment,
 } from "./media-handler.js";
 import {
   parseKind15Tags,
@@ -56,13 +56,7 @@ const STATE_PERSIST_DEBOUNCE_MS = 5000;
 // Types
 // ============================================================================
 
-export interface DecryptedMedia {
-  dataUrl: string;
-  mimeType?: string;
-  originalUrl: string;
-  blurhash?: string;
-  dimensions?: { width: number; height: number };
-}
+export type { DecryptedMedia, FailedMediaAttachment } from "./inbound-media-context.js";
 
 export interface Nip17BusOptions {
   privateKey: string;
@@ -87,6 +81,8 @@ export interface Nip17BusOptions {
     text: string,
     reply: (text: string) => Promise<void>,
     media: DecryptedMedia[] | undefined,
+    failedMedia: FailedMediaAttachment[] | undefined,
+    messageKind: 14 | 15 | undefined,
     react: (emoji: string) => Promise<void>,
   ) => Promise<void>;
   onError?: (error: Error, context: string) => void;
@@ -389,58 +385,39 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 
       // Parse and decrypt media attachments (if any)
       let decryptedMedia: DecryptedMedia[] | undefined;
+      let failedMedia: FailedMediaAttachment[] | undefined;
+      let messageKind: 14 | 15 | undefined;
       
       if (rumor.kind === 15) {
-        // Kind 15: File message with AES-GCM encryption
+        messageKind = 15;
         const metadata = parseKind15Tags(rumor.tags || []);
         if (metadata) {
-          metadata.url = rumor.content; // URL is in content for kind 15
-          try {
-            const { data, mimeType } = await fetchAndDecryptKind15File(metadata);
-            const dataUrl = mediaToDataUrl(data, mimeType);
-            
-            decryptedMedia = [{
-              dataUrl,
-              mimeType,
-              originalUrl: metadata.url,
-              blurhash: metadata.blurhash,
-              dimensions: metadata.dimensions,
-            }];
-          } catch (err) {
-            onError?.(err as Error, `decrypt kind 15 file ${metadata.url}`);
-          }
+          metadata.url = rumor.content;
         }
+        const result = await processKind15FileAttachment({
+          metadata,
+          fetchAndDecrypt: fetchAndDecryptKind15File,
+          onError,
+        });
+        decryptedMedia = result.succeeded.length > 0 ? result.succeeded : undefined;
+        failedMedia = result.failed.length > 0 ? result.failed : undefined;
       } else {
         // Kind 14: Check for imeta tags (NIP-44 encrypted Blossom blobs)
         const mediaAttachments = parseImetaTags(rumor.tags || []);
         if (mediaAttachments.length > 0) {
-          decryptedMedia = [];
-          const conversationKey = deriveConversationKey(sk, senderPubkey);
-          
-          for (const attachment of mediaAttachments) {
-            try {
-              const { data, mimeType } = await fetchAndDecryptBlob(
-                attachment.url,
-                conversationKey,
-              );
-              const effectiveMimeType = mimeType || attachment.mimeType;
-              const dataUrl = mediaToDataUrl(data, effectiveMimeType);
-              
-              decryptedMedia.push({
-                dataUrl,
-                mimeType: effectiveMimeType,
-                originalUrl: attachment.url,
-                blurhash: attachment.blurhash,
-                dimensions: attachment.dimensions,
-              });
-            } catch (err) {
-              onError?.(err as Error, `decrypt media ${attachment.url}`);
-            }
-          }
+          messageKind = 14;
+          const result = await processKind14ImetaAttachments({
+            attachments: mediaAttachments,
+            fetchAndDecrypt: fetchAndDecryptBlob,
+            deriveKey: () => deriveConversationKey(sk, senderPubkey),
+            onError,
+          });
+          decryptedMedia = result.succeeded.length > 0 ? result.succeeded : undefined;
+          failedMedia = result.failed.length > 0 ? result.failed : undefined;
         }
       }
 
-      await onMessage(senderPubkey, text, replyFn, decryptedMedia, reactFn);
+      await onMessage(senderPubkey, text, replyFn, decryptedMedia, failedMedia, messageKind, reactFn);
       lastRumorAt = Math.max(lastRumorAt, rumor.created_at);
       scheduleStatePersist(event.created_at, event.id);
     } catch (err) {

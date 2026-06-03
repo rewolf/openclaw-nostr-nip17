@@ -14,6 +14,7 @@ import {
   resolveNip17Account,
   type ResolvedNip17Account,
 } from "./types.js";
+import { prepareNonTextInboundMedia } from "./inbound-media-context.js";
 import {
   createReactionFirer,
   createReplyReactionHooks,
@@ -214,8 +215,9 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        onMessage: async (senderPubkey, text, replyFn, media, reactFn) => {
+        onMessage: async (senderPubkey, text, replyFn, media, failedMedia, messageKind, reactFn) => {
           const hasMedia = media && media.length > 0;
+          const hasFailedMedia = failedMedia && failedMedia.length > 0;
           const mediaDesc = hasMedia ? ` with ${media.length} media attachment(s)` : "";
           ctx.log?.info(`[${account.accountId}] NIP-17 DM from ${senderPubkey}${mediaDesc}: ${text.slice(0, 50)}...`);
 
@@ -247,70 +249,72 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
 
           // Build inbound context with media attachments
           let enhancedBody = text;
-          const mediaPaths: string[] = [];
-          const mediaTypes: string[] = [];
-          const attachments: any[] = [];
-          
+          let mediaPaths: string[] = [];
+          let mediaTypes: string[] = [];
+          let untrustedStructuredContext: ReturnType<typeof prepareNonTextInboundMedia>["untrustedStructuredContext"];
+
           if (hasMedia) {
-            // Save to ~/.openclaw/media/nostr-nip17/ which is in the framework's
-            // allowed localRoots (assertLocalMediaAllowed whitelist).
-            // Using os.tmpdir() siblings like "openclaw-media-nostr-nip17" fails
-            // because only the preferred OpenClaw tmp dir (openclaw-<uid>) is whitelisted.
-            const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), ".openclaw");
-            const tempDir = path.join(stateDir, "media", "nostr-nip17", Date.now().toString());
-            fs.mkdirSync(tempDir, { recursive: true });
-            
             for (let idx = 0; idx < media.length; idx++) {
               const m = media[idx];
+              if (!m.mimeType?.startsWith("text/")) {
+                continue;
+              }
+
               const extension = m.mimeType ? `.${m.mimeType.split("/")[1]}` : "";
               const name = `attachment-${idx + 1}${extension}`;
-              const base64Content = m.dataUrl.includes(",") 
-                ? m.dataUrl.split(",")[1] 
+              const base64Content = m.dataUrl.includes(",")
+                ? m.dataUrl.split(",")[1]
                 : m.dataUrl;
-              
-              ctx.log?.info?.(`[${account.accountId}] Attachment ${idx + 1}: name=${name}, mimeType=${m.mimeType}, size=${base64Content.length} base64 chars`);
-              
-              // For text files, decode and include in body directly
-              if (m.mimeType?.startsWith("text/")) {
-                try {
-                  const decoded = Buffer.from(base64Content, "base64").toString("utf8");
-                  enhancedBody += `\n\n[File: ${name}]\n${decoded}\n[End of file]`;
-                  ctx.log?.info?.(`[${account.accountId}] Included text file content in body: ${decoded.length} chars`);
-                } catch (err) {
-                  ctx.log?.error?.(`[${account.accountId}] Failed to decode text attachment: ${err}`);
-                }
-              } else if (m.mimeType?.startsWith("image/")) {
-                // For images, save to temp file for MediaPaths (OpenClaw handles the vision API conversion)
-                const filePath = path.join(tempDir, name);
-                try {
-                  const buffer = Buffer.from(base64Content, "base64");
-                  fs.writeFileSync(filePath, buffer);
-                  mediaPaths.push(filePath);
-                  if (m.mimeType) {
-                    mediaTypes.push(m.mimeType);
-                  }
-                  ctx.log?.info?.(`[${account.accountId}] Saved image ${name} to ${filePath} for vision API (${buffer.length} bytes)`);
-                } catch (err) {
-                  ctx.log?.error?.(`[${account.accountId}] Failed to save image: ${err}`);
-                }
-              } else {
-                // For other files (PDF, etc.), save to temp file and pass path
-                const filePath = path.join(tempDir, name);
-                try {
-                  const buffer = Buffer.from(base64Content, "base64");
-                  fs.writeFileSync(filePath, buffer);
-                  mediaPaths.push(filePath);
-                  if (m.mimeType) {
-                    mediaTypes.push(m.mimeType);
-                  }
-                  ctx.log?.info?.(`[${account.accountId}] Saved ${name} to ${filePath} (${buffer.length} bytes)`);
-                } catch (err) {
-                  ctx.log?.error?.(`[${account.accountId}] Failed to save attachment: ${err}`);
-                }
+
+              try {
+                const decoded = Buffer.from(base64Content, "base64").toString("utf8");
+                enhancedBody += `\n\n[File: ${name}]\n${decoded}\n[End of file]`;
+                ctx.log?.info?.(
+                  `[${account.accountId}] Included text file content in body: ${decoded.length} chars`,
+                );
+              } catch (err) {
+                ctx.log?.error?.(`[${account.accountId}] Failed to decode text attachment: ${err}`);
               }
             }
           }
-            
+
+          if (hasMedia || hasFailedMedia) {
+            const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), ".openclaw");
+            const tempDir = path.join(stateDir, "media", "nostr-nip17", Date.now().toString());
+            const hasNonTextMedia = (media ?? []).some((item) => !item.mimeType?.startsWith("text/"));
+            if (hasNonTextMedia) {
+              fs.mkdirSync(tempDir, { recursive: true });
+            }
+
+            const prepared = prepareNonTextInboundMedia({
+              media: media ?? [],
+              busFailures: failedMedia ?? [],
+              messageKind: messageKind ?? 14,
+              writeFile: (filePath, data) => {
+                fs.writeFileSync(filePath, data);
+                ctx.log?.info?.(
+                  `[${account.accountId}] Saved attachment to ${filePath} (${data.length} bytes)`,
+                );
+              },
+              makeTempPath: (index, mimeType) => {
+                const extension = mimeType ? `.${mimeType.split("/")[1]}` : "";
+                return path.join(tempDir, `attachment-${index}${extension}`);
+              },
+            });
+
+            mediaPaths = prepared.mediaPaths;
+            mediaTypes = prepared.mediaTypes;
+            untrustedStructuredContext = prepared.untrustedStructuredContext;
+
+            for (const failure of prepared.failedMedia) {
+              if (failure.stage === "save") {
+                ctx.log?.error?.(
+                  `[${account.accountId}] Failed to save attachment ${failure.index}: ${failure.error}`,
+                );
+              }
+            }
+          }
+
           const ctxPayload = runtime.channel.reply.finalizeInboundContext({
             Body: enhancedBody,
             RawBody: text,
@@ -327,7 +331,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             OriginatingChannel: "nostr-nip17",
             MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
             MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
-            Attachments: attachments.length > 0 ? attachments : undefined,
+            UntrustedStructuredContext: untrustedStructuredContext,
           });
 
           // Build reply prefix options

@@ -50,6 +50,51 @@ export function parseImetaTags(tags: string[][]): MediaAttachment[] {
   return attachments;
 }
 
+export type MediaFailureStage = "fetch" | "decrypt" | "save";
+
+export class MediaProcessingError extends Error {
+  readonly stage: MediaFailureStage;
+
+  constructor(message: string, stage: MediaFailureStage) {
+    super(message);
+    this.name = "MediaProcessingError";
+    this.stage = stage;
+  }
+}
+
+async function fetchEncryptedBlob(url: string): Promise<{
+  encryptedBytes: Uint8Array;
+  mimeType?: string;
+}> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new MediaProcessingError(
+      `Failed to fetch blob: ${response.status} ${response.statusText}`,
+      "fetch",
+    );
+  }
+
+  const encryptedData = await response.arrayBuffer();
+  const contentType = response.headers.get("content-type");
+  return {
+    encryptedBytes: new Uint8Array(encryptedData),
+    mimeType: contentType || undefined,
+  };
+}
+
+function decryptNip44Blob(encryptedBytes: Uint8Array, conversationKey: Uint8Array): Buffer {
+  try {
+    const decrypted = nip44.v2.decrypt(
+      Buffer.from(encryptedBytes).toString("base64"),
+      conversationKey,
+    );
+    return Buffer.from(decrypted, "utf8");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new MediaProcessingError(message, "decrypt");
+  }
+}
+
 /**
  * Fetch and decrypt a NIP-44 encrypted blob
  */
@@ -57,29 +102,9 @@ export async function fetchAndDecryptBlob(
   url: string,
   conversationKey: Uint8Array,
 ): Promise<{ data: Buffer; mimeType?: string }> {
-  // Fetch the encrypted blob
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch blob: ${response.status} ${response.statusText}`);
-  }
-  
-  const encryptedData = await response.arrayBuffer();
-  const encryptedBytes = new Uint8Array(encryptedData);
-  
-  // Decrypt using NIP-44
-  // The encrypted blob is expected to be in NIP-44 format
-  const decrypted = nip44.v2.decrypt(
-    Buffer.from(encryptedBytes).toString("base64"),
-    conversationKey,
-  );
-  
-  // Try to infer mime type from response headers (though spec says it won't be there)
-  const contentType = response.headers.get("content-type");
-  
-  return {
-    data: Buffer.from(decrypted, "utf8"),
-    mimeType: contentType || undefined,
-  };
+  const { encryptedBytes, mimeType } = await fetchEncryptedBlob(url);
+  const data = decryptNip44Blob(encryptedBytes, conversationKey);
+  return { data, mimeType };
 }
 
 /**

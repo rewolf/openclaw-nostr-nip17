@@ -1,4 +1,5 @@
 import { webcrypto } from "crypto";
+import { MediaProcessingError } from "./media-handler.js";
 
 /**
  * Parse kind 15 file message tags
@@ -122,49 +123,61 @@ export async function fetchAndDecryptKind15File(
   metadata: Kind15FileMetadata,
 ): Promise<{ data: Buffer; mimeType?: string }> {
   if (!metadata.url) {
-    throw new Error("Kind 15 file message missing URL");
+    throw new MediaProcessingError("Kind 15 file message missing URL", "decrypt");
   }
-  
+
   if (!metadata.decryptionKey || !metadata.decryptionNonce) {
-    throw new Error("Kind 15 file message missing decryption key or nonce");
+    throw new MediaProcessingError(
+      "Kind 15 file message missing decryption key or nonce",
+      "decrypt",
+    );
   }
-  
+
   if (metadata.encryptionAlgorithm && metadata.encryptionAlgorithm !== "aes-gcm") {
-    throw new Error(`Unsupported encryption algorithm: ${metadata.encryptionAlgorithm}`);
+    throw new MediaProcessingError(
+      `Unsupported encryption algorithm: ${metadata.encryptionAlgorithm}`,
+      "decrypt",
+    );
   }
-  
-  // Fetch encrypted file
+
   const response = await fetch(metadata.url);
   if (!response.ok) {
-    throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
+    throw new MediaProcessingError(
+      `Failed to fetch file: ${response.status} ${response.statusText}`,
+      "fetch",
+    );
   }
-  
+
   const encryptedData = await response.arrayBuffer();
-  
-  // Decrypt using AES-GCM
-  const decrypted = await decryptAesGcm(
-    new Uint8Array(encryptedData),
-    metadata.decryptionKey,
-    metadata.decryptionNonce,
-  );
-  
+
+  let decrypted: Buffer;
+  try {
+    decrypted = await decryptAesGcm(
+      new Uint8Array(encryptedData),
+      metadata.decryptionKey,
+      metadata.decryptionNonce,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new MediaProcessingError(message, "decrypt");
+  }
+
   console.log(`[kind15] Decrypted ${decrypted.length} bytes, type: ${metadata.fileType}`);
   try {
     console.log(`[kind15] First 100 chars (utf8): ${decrypted.slice(0, 100).toString('utf8')}`);
   } catch {
     console.log(`[kind15] First 100 bytes (hex): ${decrypted.slice(0, 100).toString('hex')}`);
   }
-  
-  // Verify hash if provided
+
   if (metadata.originalHash) {
     const hash = await webcrypto.subtle.digest("SHA-256", decrypted);
     const hashHex = Buffer.from(hash).toString("hex");
     console.log(`[kind15] Hash check: expected ${metadata.originalHash}, got ${hashHex}`);
     if (hashHex !== metadata.originalHash) {
-      throw new Error("Decrypted file hash mismatch");
+      throw new MediaProcessingError("Decrypted file hash mismatch", "decrypt");
     }
   }
-  
+
   return {
     data: decrypted,
     mimeType: metadata.fileType,
