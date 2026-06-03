@@ -1,8 +1,8 @@
-import type { MediaFailureStage } from "./media-handler.js";
 import { MediaProcessingError } from "./media-handler.js";
 import {
   toFailedMediaAttachment,
   type FailedMediaAttachment,
+  type MediaFailureStage,
 } from "./inbound-media-context.js";
 
 export type FetchAndDecryptBlobFn = (

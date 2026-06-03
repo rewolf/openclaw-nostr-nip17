@@ -19,11 +19,9 @@ import {
 import { getRecipientDmRelays } from "./relay-cache.js";
 import type { DecryptedMedia, FailedMediaAttachment } from "./inbound-media-context.js";
 import { processKind14ImetaAttachments, processKind15FileAttachment } from "./inbound-media-processing.js";
-import {
-  parseImetaTags,
-  fetchAndDecryptBlob,
-  deriveConversationKey,
-} from "./media-handler.js";
+import { parseKind14ImetaTags } from "./kind14-imeta-tags.js";
+import { fetchKind14ImetaMedia } from "./kind14-imeta-media.js";
+import { deriveConversationKey } from "./media-handler.js";
 import {
   parseKind15Tags,
   fetchAndDecryptKind15File,
@@ -402,13 +400,13 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
         decryptedMedia = result.succeeded.length > 0 ? result.succeeded : undefined;
         failedMedia = result.failed.length > 0 ? result.failed : undefined;
       } else {
-        // Kind 14: Check for imeta tags (NIP-44 encrypted Blossom blobs)
-        const mediaAttachments = parseImetaTags(rumor.tags || []);
+        // Kind 14: imeta tags (NIP-92 public URLs or NIP-44 encrypted blobs)
+        const mediaAttachments = parseKind14ImetaTags(rumor.tags || []);
         if (mediaAttachments.length > 0) {
           messageKind = 14;
           const result = await processKind14ImetaAttachments({
             attachments: mediaAttachments,
-            fetchAndDecrypt: fetchAndDecryptBlob,
+            fetchKind14Media: fetchKind14ImetaMedia,
             deriveKey: () => deriveConversationKey(sk, senderPubkey),
             onError,
           });

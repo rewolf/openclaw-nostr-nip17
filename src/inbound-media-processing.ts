@@ -1,24 +1,23 @@
 import type { DecryptedMedia, FailedMediaAttachment } from "./inbound-media-context.js";
-import {
-  collectMediaFailure,
-  type FetchAndDecryptBlobFn,
-} from "./inbound-media-failures.js";
-import {
-  mediaToDataUrl,
-  type MediaAttachment,
-} from "./media-handler.js";
+import { collectMediaFailure } from "./inbound-media-failures.js";
+import { mediaToDataUrl } from "./media-handler.js";
+import type { Kind14ImetaAttachment } from "./kind14-imeta-tags.js";
 import {
   fetchAndDecryptKind15File,
   type Kind15FileMetadata,
 } from "./kind15-handler.js";
+import {
+  getKind14MediaFailureStage,
+  type FetchKind14ImetaMediaFn,
+} from "./kind14-imeta-media.js";
 
 export async function processKind14ImetaAttachments(params: {
-  attachments: MediaAttachment[];
-  fetchAndDecrypt: FetchAndDecryptBlobFn;
+  attachments: Kind14ImetaAttachment[];
+  fetchKind14Media: FetchKind14ImetaMediaFn;
   deriveKey: () => Uint8Array;
   onError?: (err: Error, context: string) => void;
 }): Promise<{ succeeded: DecryptedMedia[]; failed: FailedMediaAttachment[] }> {
-  const { attachments, fetchAndDecrypt, deriveKey, onError } = params;
+  const { attachments, fetchKind14Media, deriveKey, onError } = params;
   if (attachments.length === 0) {
     return { succeeded: [], failed: [] };
   }
@@ -30,7 +29,7 @@ export async function processKind14ImetaAttachments(params: {
   for (let index = 0; index < attachments.length; index++) {
     const attachment = attachments[index];
     try {
-      const { data, mimeType } = await fetchAndDecrypt(attachment.url, conversationKey);
+      const { data, mimeType } = await fetchKind14Media(attachment, conversationKey);
       const effectiveMimeType = mimeType || attachment.mimeType;
       succeeded.push({
         dataUrl: mediaToDataUrl(data, effectiveMimeType),
@@ -44,6 +43,7 @@ export async function processKind14ImetaAttachments(params: {
         index: index + 1,
         url: attachment.url,
         mimeType: attachment.mimeType,
+        stage: getKind14MediaFailureStage(err),
       });
       failed.push(failure);
       onError?.(err instanceof Error ? err : new Error(String(err)), `decrypt media ${attachment.url}`);

@@ -1,4 +1,4 @@
-export type MediaFailureStage = "fetch" | "decrypt" | "save";
+export type MediaFailureStage = "fetch" | "decrypt" | "save" | "verify";
 
 export interface DecryptedMedia {
   dataUrl: string;

@@ -94,6 +94,29 @@ describe("buildMediaFailureStructuredContext", () => {
       ],
     });
   });
+
+  it("includes verify stage failures in structured context payload", () => {
+    const failures: FailedMediaAttachment[] = [
+      {
+        index: 1,
+        url: "https://storage.example/photo.jpg",
+        mimeType: "image/jpeg",
+        stage: "verify",
+        error: "SHA-256 mismatch",
+      },
+    ];
+
+    const result = buildMediaFailureStructuredContext({
+      failures,
+      messageKind: 14,
+      attempted: 1,
+      succeeded: 0,
+    });
+
+    expect(result?.[0]?.payload).toMatchObject({
+      failures: [{ stage: "verify", error: "SHA-256 mismatch" }],
+    });
+  });
 });
 
 describe("prepareNonTextInboundMedia", () => {
