@@ -27,6 +27,12 @@
               "type": "string"
             }
           },
+          "discoveryRelays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "dmPolicy": {
             "type": "string",
             "enum": ["pairing", "allowlist", "open", "disabled"]
@@ -86,6 +92,12 @@
                   "type": "string"
                 },
                 "relays": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "discoveryRelays": {
                   "type": "array",
                   "items": {
                     "type": "string"
