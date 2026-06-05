@@ -2,18 +2,9 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { SimplePool, type Event } from "nostr-tools";
+import { mergeRelayUrls, queryDiscoveryRelays } from "./discovery-relays.js";
 
 const CACHE_DIR = join(homedir(), ".openclaw", "state", "nostr-nip17", "relay-cache");
-
-// Well-known relays for discovering kind 10050 events.
-// DM-only relays (like nip17.com) often reject non-1059 kinds,
-// so we need general-purpose relays for metadata lookups.
-const DISCOVERY_RELAYS = [
-  "wss://relay.damus.io",
-  "wss://purplepag.es",
-  "wss://relay.primal.net",
-  "wss://nos.lol",
-];
 
 // In-memory cache to avoid hitting disk on every DM send
 const memoryCache = new Map<string, { relays: string[]; fetchedAt: number }>();
@@ -80,20 +71,11 @@ async function fetchKind10050(
   pool: SimplePool,
   pubkey: string,
   queryRelays: string[],
+  discoveryRelays: string[] | undefined,
   onError?: (error: Error, context: string) => void,
 ): Promise<string[]> {
   try {
-    // Merge discovery relays with configured relays for best coverage.
-    // DM-only relays may not serve kind 10050, so discovery relays are essential.
-    const normalizeUrl = (u: string) => u.replace(/\/+$/, "").toLowerCase();
-    const seen = new Set(queryRelays.map(normalizeUrl));
-    const allQueryRelays = [...queryRelays];
-    for (const r of DISCOVERY_RELAYS) {
-      if (!seen.has(normalizeUrl(r))) {
-        allQueryRelays.push(r);
-        seen.add(normalizeUrl(r));
-      }
-    }
+    const allQueryRelays = mergeRelayUrls(queryRelays, queryDiscoveryRelays(discoveryRelays));
 
     // Kind 10050 is a replaceable event — querySync returns the latest
     const events = await pool.querySync(
@@ -126,8 +108,12 @@ export async function getRecipientDmRelays(
   pool: SimplePool,
   pubkey: string,
   queryRelays: string[],
-  onError?: (error: Error, context: string) => void,
+  options?: {
+    discoveryRelays?: string[];
+    onError?: (error: Error, context: string) => void;
+  },
 ): Promise<string[]> {
+  const onError = options?.onError;
   // Check cache
   const cached = await readCached(pubkey);
   if (cached && cached.relays.length > 0) {
@@ -138,6 +124,12 @@ export async function getRecipientDmRelays(
   }
 
   // Fetch fresh
-  const relays = await fetchKind10050(pool, pubkey, queryRelays, onError);
+  const relays = await fetchKind10050(
+    pool,
+    pubkey,
+    queryRelays,
+    options?.discoveryRelays,
+    onError,
+  );
   return relays;
 }

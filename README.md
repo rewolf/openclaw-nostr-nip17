@@ -151,6 +151,7 @@ Each agent npub should have their DM relay list published (kind 10050), it also 
 |--------|------|---------|-------|-------------|
 | `privateKey` | string | — | top-level or account | Nostr private key in `nsec` or 64-char hex format |
 | `relays` | string[] | `["wss://relay.damus.io", "wss://nos.lol"]` | top-level or account | Relay URLs used for inbox/outbox |
+| `discoveryRelays` | string[] | public discovery relays (see below) | top-level or account | Extra relays for kind-10050 publish/query. Set to `[]` for **private relay only** — no public relay contact |
 | `dmPolicy` | string | framework default | top-level or account | `"pairing"`, `"allowlist"`, `"open"`, or `"disabled"` |
 | `allowFrom` | array<string \| number> | `[]` | top-level or account | Allowed sender pubkeys for allowlist/pairing flows |
 | `name` | string | — | account | Display name for the account |
@@ -167,6 +168,23 @@ Each agent npub should have their DM relay list published (kind 10050), it also 
 | `onToolStart` | When the agent starts a tool call |
 | `onPlanUpdate` | When the agent updates its plan |
 | `onCompactionStart` | When context compaction begins |
+
+### Private relay only
+
+If you run a local or private relay and do not want the plugin to contact public relays, set `discoveryRelays` to an empty array. Inbox subscription, outbound DMs, kind-10050 publish, and peer relay lookups all stay on `relays` only:
+
+```json
+{
+  "channels": {
+    "nostr-nip17": {
+      "relays": ["wss://192.168.68.72:6005"],
+      "discoveryRelays": []
+    }
+  }
+}
+```
+
+Omit `discoveryRelays` to keep the default behavior (publish/query kind 10050 on well-known public relays for interoperability).
 
 Account-level keys deep-merge with top-level settings. Example — receipt and compaction only:
 

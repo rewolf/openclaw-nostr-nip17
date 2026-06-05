@@ -59,6 +59,7 @@ function mergeAccountConfig(base: Nip17Config, accountOverride: Nip17AccountConf
     ...accountOverride,
     // Only override arrays if explicitly set in account config
     relays: accountOverride.relays ?? base.relays,
+    discoveryRelays: accountOverride.discoveryRelays ?? base.discoveryRelays,
     allowFrom: accountOverride.allowFrom ?? base.allowFrom,
     reactionToggle: mergeReactionToggle(base.reactionToggle, accountOverride.reactionToggle),
   };
@@ -102,6 +103,7 @@ export function resolveNip17Account(opts: {
       name: merged.name,
       privateKey: merged.privateKey,
       relays: merged.relays,
+      discoveryRelays: merged.discoveryRelays,
       dmPolicy: merged.dmPolicy,
       allowFrom: merged.allowFrom,
       reactionToggle: merged.reactionToggle,

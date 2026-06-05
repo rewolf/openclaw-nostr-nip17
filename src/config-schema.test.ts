@@ -26,6 +26,17 @@ describe("Nip17ConfigSchema reactionToggle", () => {
     }
   });
 
+  it("accepts discoveryRelays as an empty array for private relay mode", () => {
+    const result = Nip17ConfigSchema.safeParse({
+      privateKey: "nsec1test",
+      discoveryRelays: [],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.discoveryRelays).toEqual([]);
+    }
+  });
+
   it("rejects non-boolean reactionToggle values", () => {
     const result = Nip17ConfigSchema.safeParse({
       privateKey: "nsec1test",

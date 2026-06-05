@@ -45,6 +45,7 @@ async function ensureActiveBus(accountId: string): Promise<Nip17BusHandle> {
     accountId: account.accountId,
     privateKey: account.privateKey,
     relays: account.relays,
+    discoveryRelays: account.config.discoveryRelays,
     onMessage: async () => {},
     onError: () => {},
   });
@@ -215,6 +216,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
+        discoveryRelays: account.config.discoveryRelays,
         onMessage: async (senderPubkey, text, replyFn, media, failedMedia, messageKind, reactFn) => {
           const hasMedia = media && media.length > 0;
           const hasFailedMedia = failedMedia && failedMedia.length > 0;

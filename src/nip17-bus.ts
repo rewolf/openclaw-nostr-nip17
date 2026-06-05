@@ -17,6 +17,10 @@ import {
   computeSinceTimestamp,
 } from "./state-store.js";
 import { getRecipientDmRelays } from "./relay-cache.js";
+import {
+  isConfiguredRelaysOnly,
+  publishDiscoveryRelays,
+} from "./discovery-relays.js";
 import type { DecryptedMedia, FailedMediaAttachment } from "./inbound-media-context.js";
 import { processKind14ImetaAttachments, processKind15FileAttachment } from "./inbound-media-processing.js";
 import { parseKind14ImetaTags } from "./kind14-imeta-tags.js";
@@ -32,17 +36,7 @@ import { assertPublishSucceeded, type PublishAttemptResult } from "./publish-res
 
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
-// Where to publish the bot's own kind:10050 (NIP-17 DM relay list) on startup,
-// in addition to the bot's own configured relays. Without wide distribution,
-// senders' clients may query a relay that doesn't have the kind:10050 event,
-// fall back to defaults the bot doesn't subscribe to, and silently fail to
-// deliver. These three are the most-queried general-purpose relays as of
-// 2026-05; operators can override via Nip17BusOptions.discoveryRelays.
-export const DEFAULT_DISCOVERY_RELAYS = [
-  "wss://relay.damus.io",
-  "wss://nos.lol",
-  "wss://relay.primal.net",
-];
+export { DEFAULT_PUBLISH_DISCOVERY_RELAYS as DEFAULT_DISCOVERY_RELAYS } from "./discovery-relays.js";
 
 // NIP-59 gift wraps use randomized timestamps up to 2 days in the past,
 // so we need a much wider lookback window than normal
@@ -245,11 +239,13 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
     privateKey,
     relays = DEFAULT_RELAYS,
     publishRelayList = true,
-    discoveryRelays = DEFAULT_DISCOVERY_RELAYS,
+    discoveryRelays: discoveryRelaysOption,
     onMessage,
     onError,
     onEose,
   } = options;
+
+  const discoveryRelays = publishDiscoveryRelays(discoveryRelaysOption);
 
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
@@ -366,7 +362,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 
       const replyFn = createInboundReplyFn({
         sendDm: (text) =>
-          sendNip17Dm(pool, sk, senderPubkey, text, relays, trustedRelays, onError),
+          sendNip17Dm(pool, sk, senderPubkey, text, relays, trustedRelays, discoveryRelaysOption, onError),
         onError,
         errorContext: `reply to ${senderPubkey}`,
       });
@@ -375,7 +371,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       // wrapped to prevent unhandled rejections
       const reactFn = async (emoji: string): Promise<void> => {
         try {
-          await sendNip17Reaction(pool, sk, senderPubkey, rumor.id, emoji, relays, trustedRelays, onError);
+          await sendNip17Reaction(pool, sk, senderPubkey, rumor.id, emoji, relays, trustedRelays, discoveryRelaysOption, onError);
         } catch (err) {
           onError?.(err as Error, `react ${emoji} to ${senderPubkey}`);
         }
@@ -500,11 +496,11 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   scheduleRefresh();
 
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
-    await sendNip17Dm(pool, sk, toPubkey, text, relays, trustedRelays, onError);
+    await sendNip17Dm(pool, sk, toPubkey, text, relays, trustedRelays, discoveryRelaysOption, onError);
   };
 
   const sendReaction = async (toPubkey: string, rumorId: string, emoji: string): Promise<void> => {
-    await sendNip17Reaction(pool, sk, toPubkey, rumorId, emoji, relays, trustedRelays, onError);
+    await sendNip17Reaction(pool, sk, toPubkey, rumorId, emoji, relays, trustedRelays, discoveryRelaysOption, onError);
   };
 
   return {
@@ -532,6 +528,7 @@ async function publishWrappedRumor(
   rumorTemplate: { kind: number; content: string; tags: string[][]; created_at?: number },
   relays: string[],
   trustedRelays: Set<string>,
+  discoveryRelaysOption: string[] | undefined,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
   const pk = getPublicKey(sk);
@@ -548,16 +545,21 @@ async function publishWrappedRumor(
     return finalizeEvent(authEvent, sk);
   };
 
-  // Look up the recipient's DM relays (kind 10050) and merge with ours.
-  // This ensures replies reach the recipient even if they use different relays.
-  const recipientDmRelays = await getRecipientDmRelays(pool, toPubkey, relays, onError);
-  const normalizeUrl = (u: string) => u.replace(/\/+$/, "").toLowerCase();
-  const ourRelaySet = new Set(relays.map(normalizeUrl));
-  const extraRelays = recipientDmRelays.filter(r => !ourRelaySet.has(normalizeUrl(r)));
-  const allRelays = [...relays, ...extraRelays];
+  let allRelays = relays;
+  if (!isConfiguredRelaysOnly(discoveryRelaysOption)) {
+    // Look up the recipient's DM relays (kind 10050) and merge with ours.
+    const recipientDmRelays = await getRecipientDmRelays(pool, toPubkey, relays, {
+      discoveryRelays: discoveryRelaysOption,
+      onError,
+    });
+    const normalizeUrl = (u: string) => u.replace(/\/+$/, "").toLowerCase();
+    const ourRelaySet = new Set(relays.map(normalizeUrl));
+    const extraRelays = recipientDmRelays.filter((r) => !ourRelaySet.has(normalizeUrl(r)));
+    allRelays = [...relays, ...extraRelays];
 
-  if (extraRelays.length > 0) {
-    onError?.(new Error(`Adding recipient DM relays: ${extraRelays.join(", ")}`), "recipient-relays");
+    if (extraRelays.length > 0) {
+      onError?.(new Error(`Adding recipient DM relays: ${extraRelays.join(", ")}`), "recipient-relays");
+    }
   }
 
   const event = {
@@ -633,6 +635,7 @@ async function sendNip17Dm(
   text: string,
   relays: string[],
   trustedRelays: Set<string>,
+  discoveryRelaysOption: string[] | undefined,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
   await publishWrappedRumor(
@@ -642,6 +645,7 @@ async function sendNip17Dm(
     { kind: 14, content: text, tags: [["p", toPubkey]] },
     relays,
     trustedRelays,
+    discoveryRelaysOption,
     onError,
   );
 }
@@ -656,6 +660,7 @@ async function sendNip17Reaction(
   emoji: string,
   relays: string[],
   trustedRelays: Set<string>,
+  discoveryRelaysOption: string[] | undefined,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
   await publishWrappedRumor(
@@ -669,6 +674,7 @@ async function sendNip17Reaction(
     },
     relays,
     trustedRelays,
+    discoveryRelaysOption,
     onError,
   );
 }
