@@ -5,7 +5,12 @@ import {
   nip19,
   type Event,
 } from "nostr-tools";
-import { wrapEvent, unwrapEvent } from "nostr-tools/nip59";
+import {
+  unwrapEvent,
+  createRumor,
+  createSeal,
+  createWrap,
+} from "nostr-tools/nip59";
 import {
   readNostrBusState,
   writeNostrBusState,
@@ -587,12 +592,12 @@ async function publishWrappedRumor(
 
   // Manual NIP-59: rumor → seal → wrap
   // createWrap already signs with an ephemeral key — do NOT re-sign with sk
-  const rumor = require('nostr-tools/nip59').createRumor(event, sk);
-  const sealRecipient = require('nostr-tools/nip59').createSeal(rumor, sk, toPubkey);
-  const wrapForRecipient = require('nostr-tools/nip59').createWrap(sealRecipient, toPubkey);
+  const rumor = createRumor(event, sk);
+  const sealRecipient = createSeal(rumor, sk, toPubkey);
+  const wrapForRecipient = createWrap(sealRecipient, toPubkey);
 
-  const sealSelf = require('nostr-tools/nip59').createSeal(rumor, sk, pk);
-  const wrapForSelf = require('nostr-tools/nip59').createWrap(sealSelf, pk);
+  const sealSelf = createSeal(rumor, sk, pk);
+  const wrapForSelf = createWrap(sealSelf, pk);
 
   // Publish recipient's wrap to all relays (ours + theirs)
   // Publish our self-copy wrap to only our relays
